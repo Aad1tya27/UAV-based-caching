@@ -11,18 +11,22 @@ M = 300           # Total content items
 M_V = 120         # UAV cache capacity
 M_U = 40          # User cache capacity
 dim = 2 * M       # qV (M) + qU (M)
-num_UAVs = 4
-num_users = 50
+num_UAVs = 20
+num_users = 200
 area_size = 500
-K = 1
+K = 5
 UAV_altitude_range = (60,80)
 system_bandwidth_UAV = 1e9  # 1 GHz
-
+uav_density = num_UAVs / area_size**2
+tau_U = num_users / area_size**2
 
 class Whale:
     def __init__(self, dim, seed):
         q_V_inital = np.random.uniform(0, 1, M)
+        # q_V_inital = np.ones((M,))
+        # q_U_inital = np.random.uniform(0, 1, M)
         q_U_inital = np.random.uniform(0, 1, M)
+        # q_U_inital = np.ones((M,))
         self.position = np.zeros(dim)
         
         # Initialize qV and qU randomly in [0, 1]
@@ -67,7 +71,7 @@ def fitness_func(position):
     qU = position[M:]
     
     # Run simulation with these caching probabilities
-    profit = main_simulation(qV, qU, user_requests, user_pos, uav_pos, P_u_v, B_u_v, cluster_labels, K)  # Modify your main() to accept qV/qU and return profit
+    profit = main_simulation(qV, qU, user_requests, user_pos, uav_pos, P_u_v, B_u_v, cluster_labels, K, num_users, num_UAVs, uav_density, tau_U)  # Modify your main() to accept qV/qU and return profit
     return profit
 
 def woa_optimizer(fitness_func, max_iter=50, n_whales=30):
