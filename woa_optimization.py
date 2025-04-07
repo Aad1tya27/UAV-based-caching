@@ -46,8 +46,11 @@ class Whale:
         self.position[:M] = q_V_inital
         self.position[M:] = q_U_inital
         
-        # self.fifo_V = [ i for i in range(M) ]
-        # self.fifo_U = [ i for i in range(M,2*M) ]
+        self.fifo_V = [i for i in range(M)]
+        random.shuffle(self.fifo_V)
+
+        self.fifo_U = [i for i in range(M, 2*M)]
+        random.shuffle(self.fifo_U)
         
         self._enforce_cache_constraints()
 
@@ -60,9 +63,9 @@ class Whale:
         
         while sum_qV > M_V:
             # self.position[:M] *= M_V / sum_qV
-            c = np.random.randint(0, M)
-            # c =  self.fifo_V.pop(0)
-            # self.fifo_V.append(c)
+            # c = np.random.randint(0, M)
+            c =  self.fifo_V.pop(0)
+            self.fifo_V.append(c)
             self.position[c] = 0
             sum_qV = np.sum(self.position[:M])
             # print(self.position[c], sum_qV)
@@ -70,9 +73,9 @@ class Whale:
         # Normalize qU to sum <= M_U
         sum_qU = np.sum(self.position[M:])
         while sum_qU > M_U:
-            c = np.random.randint(M, 2*M)
-            # c = self.fifo_U.pop(0)
-            # self.fifo_U.append(c)
+            # c = np.random.randint(M, 2*M)
+            c = self.fifo_U.pop(0)
+            self.fifo_U.append(c)
             self.position[c] = 0
             sum_qU = np.sum(self.position[M:])
             # print(self.position[c], sum_qU)

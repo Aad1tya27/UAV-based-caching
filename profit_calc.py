@@ -700,15 +700,15 @@ def fitness_func(position ,user_requests, user_pos, uav_pos, P_u_v_k, B_u_v_k, c
 
 if __name__ == "__main__":
     # num_users = 50
-    num_UAVs= 5
+    num_users= 100
     
     K = 20
-    user_counts = []
+    uav_counts = []
     totalprofits_random = []
     totalprofits_whale = []
     totalprofits_vulture = []
-    for num_users in [60, 80 , 100 , 120 , 140]:
-        print("Running for users:", num_users)
+    for num_UAVs in [6, 10, 14, 18]:
+        print("Running for UAVs:", num_UAVs)
         
         user_requests = generate_user_requests(K, num_users) # 1st param
         user_pos = np.random.uniform(0, area_size, (num_users, 2)) # 2nd param
@@ -861,27 +861,27 @@ if __name__ == "__main__":
 
 
 
-        user_counts.append(num_users)
+        uav_counts.append(num_UAVs)
         totalprofits_random.append(totalprofit)
         totalprofits_whale.append(totalprofit2)
         totalprofits_vulture.append(totalprofit3)
 
     plt.figure(figsize=(10, 6))
-    plt.plot(user_counts, totalprofits_random, 'b-o', label='Random Method', linewidth=2)
-    plt.plot(user_counts, totalprofits_whale, 'r--s', label='Whale Optimization', linewidth=2)
-    plt.plot(user_counts, totalprofits_vulture, 'g-.D', label='Vulture Optimization', linewidth=2)
+    plt.plot(uav_counts, totalprofits_random, 'b-o', label='Random Method', linewidth=2)
+    plt.plot(uav_counts, totalprofits_whale, 'r--s', label='Whale Optimization', linewidth=2)
+    plt.plot(uav_counts, totalprofits_vulture, 'g-.D', label='Vulture Optimization', linewidth=2)
 
-    plt.xlabel('Number of Users', fontsize=12)
+    plt.xlabel('Number of UAVs', fontsize=12)
     plt.ylabel('Total Profit', fontsize=12)
     plt.title("System Performance Comparison", fontsize=14)
-    plt.xticks(user_counts, fontsize=10)
+    plt.xticks(uav_counts, fontsize=10)
     plt.yticks(fontsize=10)
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.legend(fontsize=10)
     plt.tight_layout()
 
     # Save and show
-    filename = "profitVsUsers9_uav"+str(num_UAVs) + ".png"
+    filename = "profitVsUavs_user"+str(num_users) + ".png"
     plt.savefig(filename, dpi=300)
     plt.show()
 
