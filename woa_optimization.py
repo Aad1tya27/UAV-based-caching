@@ -83,15 +83,15 @@ class Whale:
         #     self.position[M:] *= M_U / sum_qU
 
 
-def woa_optimizer(fitness_func, user_requests, user_pos, uav_pos, P_u_v_k, B_u_v_k, cluster_labels, K, num_users, num_UAVs, uav_density, tau_U,  max_iter=30, n_whales=30):
+def woa_optimizer(fitness_func, user_requests, user_pos, uav_pos, P_u_v_k, B_u_v_k, cluster_labels, K, num_users, num_UAVs, uav_density, tau_U, max_iter=30, n_whales=30, omega=0.5):
     print("Initializing Whale Optimization...")
     
     
     # Initialize population
     population = [Whale(dim, i) for i in range(n_whales)]
     print("Initial Whales Computed ...")
-    best_whale = max(population, key=lambda x: fitness_func(x.position, user_requests, user_pos, uav_pos, P_u_v_k, B_u_v_k, cluster_labels, K, num_users, num_UAVs, uav_density, tau_U))
-    best_whale_fitness = fitness_func(best_whale.position, user_requests, user_pos, uav_pos, P_u_v_k, B_u_v_k, cluster_labels, K, num_users, num_UAVs, uav_density, tau_U)
+    best_whale = max(population, key=lambda x: fitness_func(x.position, user_requests, user_pos, uav_pos, P_u_v_k, B_u_v_k, cluster_labels, K, num_users, num_UAVs, uav_density, tau_U, omega))
+    best_whale_fitness = fitness_func(best_whale.position, user_requests, user_pos, uav_pos, P_u_v_k, B_u_v_k, cluster_labels, K, num_users, num_UAVs, uav_density, tau_U, omega)
     iter = 0
     while iter <= max_iter: 
     # for iter in range(max_iter):
@@ -127,7 +127,7 @@ def woa_optimizer(fitness_func, user_requests, user_pos, uav_pos, P_u_v_k, B_u_v
             whale._enforce_cache_constraints()
             
             # Update best solution
-            curr_fitness = fitness_func(whale.position, user_requests, user_pos, uav_pos, P_u_v_k, B_u_v_k, cluster_labels, K, num_users, num_UAVs, uav_density, tau_U)
+            curr_fitness = fitness_func(whale.position, user_requests, user_pos, uav_pos, P_u_v_k, B_u_v_k, cluster_labels, K, num_users, num_UAVs, uav_density, tau_U, omega)
             if  curr_fitness > best_whale_fitness:
                 best_whale = copy.deepcopy(whale)
                 best_whale_fitness = curr_fitness

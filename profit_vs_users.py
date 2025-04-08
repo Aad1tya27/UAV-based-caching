@@ -112,19 +112,19 @@ def content_cached_prob(M):
 
     return q
 
-def U2D_caching_hit(pc, q, num, r_v = range_v):
-    pc_V = np.zeros((num))
-    for i in range(num):
-        for j in range(total_contents):
-            pc_V[i] += pc[j] * (1 - q[j,i]) * ( 1 - np.exp(-num * q[j,i] * np.pi * r_v**2 ))
-    return pc_V
+# def U2D_caching_hit(pc, q, num, r_v = range_v):
+#     pc_V = np.zeros((num))
+#     for i in range(num):
+#         for j in range(total_contents):
+#             pc_V[i] += pc[j] * (1 - q[j,i]) * ( 1 - np.exp(-num * q[j,i] * np.pi * r_v**2 ))
+#     return pc_V
 
-def D2D_caching_hit(pc , q, num, rho, r_d = range_u):
-    pc_U = np.zeros((num))
-    for i in range(num):
-        for j in range(total_contents):
-            pc_U[i] += pc[j] * (1 - q[j,i]) * ( 1 - np.exp(-rho * q[j,i] * np.pi * r_d**2 ))
-    return pc_U
+# def D2D_caching_hit(pc , q, num, rho, r_d = range_u):
+#     pc_U = np.zeros((num))
+#     for i in range(num):
+#         for j in range(total_contents):
+#             pc_U[i] += pc[j] * (1 - q[j,i]) * ( 1 - np.exp(-rho * q[j,i] * np.pi * r_d**2 ))
+#     return pc_U
 
 # -------------------- Path Loss ----------------------
 
@@ -240,6 +240,32 @@ def H2D_succes_prob(u, user_pos):
 
 # -------------------- SINR Calculations ------------------
 
+def U2D_sinr_vectorized(P_matrix, uav_pos, user_pos, omega=1):
+    sigma = sigma2 
+
+    delta_pos = user_pos[:, np.newaxis, :2] - uav_pos[np.newaxis, :, :2]
+    r = np.linalg.norm(delta_pos, axis=2) 
+    
+    altitudes = uav_pos[:, 2]  
+    distances = np.sqrt(r**2 + altitudes**2)  
+    
+    # Calculate LoS probabilities
+    phi = np.arcsin(altitudes[np.newaxis, :] / distances)
+    p_los = los_probability(phi)
+    
+    # Calculate path losses
+    pl_los = path_loss_los(distances)  # Uses vectorized path loss functions
+    pl_nlos = path_loss_nlos(distances)
+    
+    # Average path loss in dB
+    PL_avg = p_los * pl_los + (1 - p_los) * pl_nlos
+    
+    # Convert to linear scale and calculate SINR
+    PL_linear = 10 ** (PL_avg / 10)
+    sinr_matrix = (P_matrix * omega) / (PL_linear * sigma)
+    
+    return sinr_matrix
+
 def U2D_sinr(u ,v ,P, uav_pos, user_pos, omega = 1 ):
     sigma = sigma2 
     # gamma_sample = np.random.gamma(shape=m0, scale=omega/m0)
@@ -260,83 +286,151 @@ def U2D_sinr(u ,v ,P, uav_pos, user_pos, omega = 1 ):
     sinr = (P * g_sq) / (10 **(PL_avg/10) * sigma)
     return sinr
 
-def D2D_sinr(u, m, user_pos, P_U, bandwidth_users,num_users, omega = 1):
 
-    d_desired = np.linalg.norm(user_pos[u] - user_pos[m])
-    d_desired = max(d_desired, 1e-6)  # Ensures no division by zero
-    # gamma_sample = np.random.gamma(shape=m0, scale=omega/m0)
-    # g_h_u = np.sqrt(gamma_sample)
-    # g_sq = g_h_u**2
-    g_sq = omega
-    # g_sq = 1
-    signal = P_U * g_sq * (d_desired ** (-beta_pl))
+def D2D_sinr_vectorized(user_pos, P_U, bandwidth_users, num_users, omega=1):
     
-    # Noise power over the allocated bandwidth
-    noise = sigma2 
+    delta = user_pos[:, np.newaxis, :] - user_pos[np.newaxis, :, :]
+    dist_matrix = np.linalg.norm(delta, axis=2)
+    np.fill_diagonal(dist_matrix, np.inf)  # Exclude self
+    
+    nearest_idx = np.argmin(dist_matrix, axis=1)
+    nearest_dist = dist_matrix[np.arange(num_users), nearest_idx]
+    
+    signal = P_U * omega * (nearest_dist ** -beta_pl)
+    
+    mask = (dist_matrix < range_u) & (dist_matrix > 0)
+    interf_matrix = P_U * omega * (dist_matrix ** -beta_pl)
+    interference = np.sum(interf_matrix * mask, axis=1)
+    
+    sat_distances = np.linalg.norm(user_pos - SAT_pos[:2], axis=1)
+    PL_vector = np.vectorize(satellite_path_loss)(sat_distances)
+    sat_interference = P_H * omega * 10 ** (-PL_vector / 10)
+    
+    noise = sigma2 + interference + sat_interference
+    
+    # sinr = np.divide(signal, noise, where=noise!=0)
 
-    I_d2d = 0
-    for i in range(num_users):
-        if i == u or i == m:
-            continue
-        d_int = np.linalg.norm(user_pos[i] - user_pos[m])
-        if d_int > range_u:
-            continue
-        g_int = omega
-        I_d2d += P_U * g_int * (d_int ** (-beta_pl))
+    sinr = np.zeros_like(signal)
+    np.divide(signal, noise, out=sinr, where=noise!=0)
+
+    sinr = np.clip(sinr, a_min=1e-10, a_max=None)  # Example clipping
+    return sinr, nearest_idx
+
+# def D2D_sinr(u, m, user_pos, P_U, bandwidth_users,num_users, omega = 1):
+
+#     d_desired = np.linalg.norm(user_pos[u] - user_pos[m])
+#     d_desired = max(d_desired, 1e-6)  # Ensures no division by zero
+  
+#     g_sq = omega
+#     # g_sq = 1
+#     signal = P_U * g_sq * (d_desired ** (-beta_pl))
     
-    # SAT interference: apply Rayleigh fading and convert SAT link loss from dB to linear scale.
-    # g_SAT = np.sqrt(np.random.gamma(shape=m0, scale=omega/m0))**2
-    g_SAT = omega
-    L_u_m = satellite_path_loss(np.linalg.norm(user_pos[u] - SAT_pos[:2]))
-    I_SAT = P_H * g_SAT * 10**(-L_u_m/10)
+#     # Noise power over the allocated bandwidth
+#     noise = sigma2 
+
+#     I_d2d = 0
+#     for i in range(num_users):
+#         if i == u or i == m:
+#             continue
+#         d_int = np.linalg.norm(user_pos[i] - user_pos[m])
+#         if d_int > range_u:
+#             continue
+#         g_int = omega
+#         I_d2d += P_U * g_int * (d_int ** (-beta_pl))
     
-    # Total interference plus noise
-    denom = noise + I_d2d + I_SAT
+#     g_SAT = omega
+#     L_u_m = satellite_path_loss(np.linalg.norm(user_pos[u] - SAT_pos[:2]))
+#     I_SAT = P_H * g_SAT * 10**(-L_u_m/10)
     
-    sinr = signal / denom
+#     denom = noise + I_d2d + I_SAT
+    
+#     sinr = signal / denom
+#     return sinr
+
+
+def H2D_sinr_vectorized(user_pos, omega=1):
+
+    sat_pos_2d = np.array(SAT_pos[:2])
+    delta = user_pos - sat_pos_2d[np.newaxis, :]
+    distances = np.linalg.norm(delta, axis=1)
+    
+    PL = np.vectorize(satellite_path_loss)(distances)
+    
+    received_power = P_H * omega * 10 ** (-PL / 10)
+    sinr = received_power / sigma2
+    
     return sinr
 
-def H2D_sinr(u, user_pos, omega = 1):
-    distance_horizontal = np.linalg.norm(user_pos[u] - SAT_pos[:2])
-    PL = satellite_path_loss(distance_horizontal)
-    # gamma_sample = np.random.gamma(shape=m0, scale=omega/m0)
-    # g_h_u = np.sqrt(gamma_sample)
-    # g_sq = g_h_u**2
-    g_sq = omega
+# def H2D_sinr(u, user_pos, omega = 1):
+#     distance_horizontal = np.linalg.norm(user_pos[u] - SAT_pos[:2])
+#     PL = satellite_path_loss(distance_horizontal)
+#     g_sq = omega
 
 
-    received_power = P_H * g_sq * 10**(-PL / 10)
-    noise = sigma2 
-    return received_power / noise
+#     received_power = P_H * g_sq * 10**(-PL / 10)
+#     noise = sigma2 
+#     return received_power / noise
 
 # ------------------ THROUGHPUT CALCULATION ---------------------
-def calculate_U2D_throughput(pc_i, q_U,q_V, range_v, pc_V_success, B_u_v, cluster_labels, P, user_pos, uav_pos , num_users, num_UAVs, uav_density):
-    ans = 0
-    for i in range(total_contents):
-        temp  = 0
-        for u in range(num_users):
-            v = cluster_labels[u]
-            temp += pc_V_success[i, u]*  B_u_v[u,v] * np.log2(1 + U2D_sinr(u ,v,P[u,v], uav_pos, user_pos))
-        ans += temp * pc_i[i] * ( 1 - q_U[i] ) * (1 - np.exp( - uav_density * q_V[i] * np.pi * range_v**2 ))
-    return ans
+def calculate_U2D_throughput(pc_i, q_U,q_V, range_v, pc_V_success, B_u_v, cluster_labels, P_matrix, user_pos, uav_pos , num_users, num_UAVs, uav_density):
+    # ans = 0
+    # for i in range(total_contents):
+    #     temp  = 0
+    #     for u in range(num_users):
+    #         v = cluster_labels[u]
+    #         temp += pc_V_success[i, u]*  B_u_v[u,v] * np.log2(1 + U2D_sinr(u ,v,P[u,v], uav_pos, user_pos))
+    #     ans += temp * pc_i[i] * ( 1 - q_U[i] ) * (1 - np.exp( - uav_density * q_V[i] * np.pi * range_v**2 ))
+    # return ans
+    sinr_matrix = U2D_sinr_vectorized(P_matrix, uav_pos, user_pos)
+
+    user_indices = np.arange(num_users)
+    assigned_v = cluster_labels
+    sinr_assigned = sinr_matrix[user_indices, assigned_v]
+    B_assigned = B_u_v[user_indices, assigned_v]
+    
+    log_sinr = np.log2(1 + sinr_assigned)
+    
+    cache_term = (1 - q_U) * (1 - np.exp(-uav_density * q_V * np.pi * range_v**2))
+    user_terms = pc_V_success * B_assigned * log_sinr
+    
+    throughput = np.sum(pc_i[:, np.newaxis] * cache_term[:, np.newaxis] * user_terms)
+    
+    return throughput
 
 def calculate_D2D_throughput(pc_i, q_U, pr_V, pr_U, pc_U_success, B_D2D, N_D, P_U, user_pos, num_users):
     if N_D == 0:
         return 0.0
     throughput = 0.0
+
+    sinr_vals, nearest_idx = D2D_sinr_vectorized(user_pos, P_U, B_D2D, num_users)
+
+    # for i in range(total_contents):
+    #     temp = 0
+    #     for u in range(num_users):
+    #         if pc_U_success[i, u] == 0: continue
+    #         distances = [np.linalg.norm(user_pos[u] - user_pos[m]) for m in range(num_users) if m != u]
+    #         m = np.argmin(distances)
+    #         sinr = D2D_sinr(u, m, user_pos, P_U, bandwidth_per_user, num_users)
+    #         sinr = min(sinr, 1e3)  # Maximum realistic SINR of 30 dB
+    #         temp += pc_U_success[i, u] * bandwidth_per_user * np.log2(1 + sinr)
+
+    #     throughput += temp * pc_i[i] * (1 - q_U[i]) * (1 - pr_V[i]) * pr_U[i]
+
+    # return throughput
+    N_D = np.sum(sinr_vals > 0)
+    if N_D == 0:
+        return 0.0
+    
     bandwidth_per_user = B_D2D / N_D
-    for i in range(total_contents):
-        temp = 0
-        for u in range(num_users):
-            if pc_U_success[i, u] == 0: continue
-            distances = [np.linalg.norm(user_pos[u] - user_pos[m]) for m in range(num_users) if m != u]
-            m = np.argmin(distances)
-            sinr = D2D_sinr(u, m, user_pos, P_U, bandwidth_per_user, num_users)
-            sinr = min(sinr, 1e3)  
-            temp += pc_U_success[i, u] * bandwidth_per_user * np.log2(1 + sinr)
-
-        throughput += temp * pc_i[i] * (1 - q_U[i]) * (1 - pr_V[i]) * pr_U[i]
-
+    
+    rates = bandwidth_per_user * np.log2(1 + sinr_vals)
+    
+    content_term = pc_i[:, np.newaxis] * (1 - q_U[:, np.newaxis])
+    prob_term = (1 - pr_V[:, np.newaxis]) * pr_U[:, np.newaxis]
+    success_term = pc_U_success * rates[np.newaxis, :]
+    
+    throughput = np.sum(content_term * prob_term * success_term)
+    
     return throughput
 
 def calculate_H2D_throughput(pc_i, pr_V, pr_U, pc_H_success, B_H2D, N_H, user_pos, num_users):
@@ -344,58 +438,85 @@ def calculate_H2D_throughput(pc_i, pr_V, pr_U, pc_H_success, B_H2D, N_H, user_po
         return 0.0
     throughput = 0.0
     bandwidth_per_user = B_H2D / N_H
-    # print(bandwidth_per_user)
-    for i in range(total_contents):
-        temp = 0
-        for u in range(num_users):
-            if pc_H_success[i,u] == 0: continue
-            # print(pc_H_success[i,u])
-            snr = H2D_sinr(u, user_pos)
-            temp += pc_H_success[i, u] * bandwidth_per_user * np.log2(1 + snr)
-            # if temp: print(temp * pc_i[i] * (1 - pr_V[i]) * (1 - pr_U[i]), temp)
-        throughput += temp * pc_i[i] * (1 - pr_V[i]) * (1 - pr_U[i])
+
+    # for i in range(total_contents):
+    #     temp = 0
+    #     for u in range(num_users):
+    #         if pc_H_success[i,u] == 0: continue
+    #         snr = H2D_sinr(u, user_pos)
+    #         temp += pc_H_success[i, u] * bandwidth_per_user * np.log2(1 + snr)
+    #     throughput += temp * pc_i[i] * (1 - pr_V[i]) * (1 - pr_U[i])
+    # return throughput
+
+    sinr = H2D_sinr_vectorized(user_pos)  # (num_users,)
+
+    log_sinr = np.log2(1 + sinr)  # (num_users,)
+    rate_matrix = bandwidth_per_user * log_sinr[np.newaxis, :]  # (1, num_users)
+    
+    content_factors = pc_i[:, np.newaxis] * (1 - pr_V[:, np.newaxis]) * (1 - pr_U[:, np.newaxis])  # (total_contents, 1)
+    success_rates = pc_H_success * rate_matrix  # (total_contents, num_users)
+    
+    throughput = np.sum(content_factors * success_rates)
+    
     return throughput
 
 # -------------------- Energy Calculation ----------------------------
 
 def calculate_U2D_energy(pc_i, q_U,q_V, range_v, pc_V_success, cluster_labels, P, num_users, num_UAVs, uav_density):
-    energy = 0
-    for i in range(total_contents):
-        temp  = 0
-        for u in range(num_users):
-            if pc_V_success[i,u] == 0: continue
-            v = cluster_labels[u]
-            temp += pc_V_success[i,u] * P[u,v]
-        energy += temp * pc_i[i] * ( 1- q_U[i]) * (1 - np.exp( - uav_density * q_V[i] * np.pi * range_v**2 ))
-    return energy
+    user_indices = np.arange(num_users)
+    assigned_v = cluster_labels
+    P_assigned = P[user_indices, assigned_v]
+
+    constant_term = pc_i * (1 - q_U) * (1 - np.exp( - uav_density * q_V * np.pi * range_v**2 ))
+    sum_per_content = np.sum(pc_V_success * P_assigned, axis=1)  # Sum over users for each content
+
+    return np.sum(sum_per_content * constant_term)
+
+    # energy = 0
+    # for i in range(total_contents):
+    #     temp  = 0
+    #     for u in range(num_users):
+    #         if pc_V_success[i,u] == 0: continue
+    #         v = cluster_labels[u]
+    #         temp += pc_V_success[i,u] * P[u,v]
+    #     energy += temp * pc_i[i] * ( 1- q_U[i]) * (1 - np.exp( - uav_density * q_V[i] * np.pi * range_v**2 ))
+    # return energy
 
 def calculate_D2D_energy(pc_i, current_requests, q_U, pr_V, pr_U, pc_U_success, P_U, num_users, num_UAVs):
-    energy = 0.0
-    for u in range(num_users):
-        req_type, req_content = current_requests[u]
-        if req_type != 1:  # Skip computation requests
-            continue
-        c = int(req_content - 1)  # Content index (0-based)
-        if pc_U_success[c, u] == 0:
-            continue
-        # Terms: (1 - q_U[c]) * (1 - pr_V[c]) * pr_U[c]
-        energy_term = pc_i[c] * (1 - q_U[c]) * (1 - pr_V[c]) * pr_U[c]
-        energy += pc_U_success[c, u] * P_U * energy_term
-    return energy
+    # energy = 0.0
+    # for u in range(num_users):
+    #     req_type, req_content = current_requests[u]
+    #     if req_type != 1:  # Skip computation requests
+    #         continue
+    #     c = int(req_content - 1)  # Content index (0-based)
+    #     if pc_U_success[c, u] == 0:
+    #         continue
+    #     energy_term = pc_i[c] * (1 - q_U[c]) * (1 - pr_V[c]) * pr_U[c]
+    #     energy += pc_U_success[c, u] * P_U * energy_term
+    # return energy
+    mask = (current_requests[:, 0] == 1)
+    users_with_content = np.where(mask)[0]
+    if users_with_content.size == 0:
+        return 0.0
+    c_indices = current_requests[users_with_content, 1].astype(int) - 1
+
+    selected_pc_U_success = pc_U_success[c_indices, users_with_content]
+    energy_terms = selected_pc_U_success * P_U
+    energy_terms *= pc_i[c_indices] * (1 - q_U[c_indices]) * (1 - pr_V[c_indices]) * pr_U[c_indices]
+    return np.sum(energy_terms)
 
 def calculate_H2D_energy(pc_i, pr_V, pr_U, pc_H_success, num_users, num_UAVs): 
-    energy = 0.0
-    # print(bandwidth_per_user)
-    for i in range(total_contents):
-        temp = 0
-        for u in range(num_users):
-            if pc_H_success[i,u] == 0: continue
-            # print(pc_H_success[i,u])
-            temp += pc_H_success[i, u] * P_H
-            # if temp: print(temp * pc_i[i] * (1 - pr_V[i]) * (1 - pr_U[i]), temp)
-        energy += temp * pc_i[i] * (1 - pr_V[i]) * (1 - pr_U[i])
-    return energy
-
+    # energy = 0.0
+    # for i in range(total_contents):
+    #     temp = 0
+    #     for u in range(num_users):
+    #         if pc_H_success[i,u] == 0: continue
+    #         temp += pc_H_success[i, u] * P_H
+    #     energy += temp * pc_i[i] * (1 - pr_V[i]) * (1 - pr_U[i])
+    # return energy
+    sum_per_content = np.sum(pc_H_success, axis=1) * P_H  # Sum over users and multiply by P_H
+    energy_terms = sum_per_content * pc_i * (1 - pr_V) * (1 - pr_U)
+    return np.sum(energy_terms)
     
 # _____________________ COMPUTATION FUNCTIONS _______________________________
 
@@ -476,7 +597,7 @@ def generate_preferences(user_pos, uav_pos, num_users, num_UAVs, q_V, user_reque
 
 
 def gale_shapley(user_prefs, uav_prefs, num_users, num_UAVs, P_V_total_max_dbm, P_V_max, user_pos, uav_pos):
-    # Calculate maximum number of users each UAV can support.
+
     quota_per_uav = math.floor(P_V_total_max_dbm / P_V_max)
     
     # Build a ranking matrix for each UAV:
@@ -602,7 +723,7 @@ def main(q_V, q_U ,user_requests, user_pos, uav_pos, P_u_v_k, B_u_v_k, cluster_l
         for i in range(num_UAVs):
             a_comp[i] = []
         
-        # uav_occupied = np.zeros((num_UAVs, ))
+
         for u in range(num_users):
             user_req = current_requests[u]
             if user_req[0] == 1:
@@ -610,12 +731,10 @@ def main(q_V, q_U ,user_requests, user_pos, uav_pos, P_u_v_k, B_u_v_k, cluster_l
                 v = np.argmin(distances)
                 res_U2D = U2D_succes_prob(q_V, u, uav_pos, user_pos, int(user_req[1]-1), P_u_v[u,v], num_UAVs, uav_density, v)
                 if res_U2D > 0:
-                    # print("U2D: ", res_U2D)
                     pc_V_success[int(user_req[1]-1), u] = res_U2D
                     continue
                 res_D2D = D2D_succes_prob(q_U, u, user_pos, int(user_req[1]-1), P_U, tau_U, num_users)
                 if res_D2D > 0:
-                    # print("D2D:",res_D2D)
                     N_U += 1
                     pc_U_success[int(user_req[1]-1), u] = res_D2D
                     continue
@@ -638,53 +757,36 @@ def main(q_V, q_U ,user_requests, user_pos, uav_pos, P_u_v_k, B_u_v_k, cluster_l
             task_size = user_req[1]
             required_cycles = mu_v * task_size
             if required_cycles <= tau_comp * f_max_v:
-                # print("if condition")
-                    # sinr = U2D_sinr(u, v, P_u_v[u,v], uav_pos, user_pos, B_u_v[u,v])
-                    # rate = B_u_v[u,v] * np.log2(1 + sinr)
+                
                 sinr = computation_UAV_sinr(P_U, u,v, user_pos, uav_pos)
-                # print( B_u_v[u,v]  * np.log2(1 + sinr))
+
                 rate = B_u_v[u,v]  * np.log2(1 + sinr)
                 RV_comp +=  rate
                 E_comp += (nu_v * (required_cycles**3)) / (tau_comp**2)
             else:    
-                # print("else condition")
+
                 P_v_sat = 1
                 snr = computation_V2S_sinr(P_v_sat)
-                # snr = H2D_sinr(u, user_pos)
-                # print(bandwidth_SAT * np.log2(1 + snr))
+                
                 rate = (bandwidth_SAT/10) * np.log2(1 + snr)
                 RV_comp += rate
 
         RV_V = calculate_U2D_throughput(pc_content_prob, q_U,q_V, range_v, pc_V_success, B_u_v, curr_cluster_labels, P_u_v, user_pos, uav_pos, num_users, num_UAVs, uav_density )
         RV_U = calculate_D2D_throughput(pc_content_prob, q_U, pr_V, pr_U, pc_U_success, bandwidth_users, N_U, P_U, user_pos, num_users)
         RV_H = calculate_H2D_throughput(pc_content_prob, pr_V, pr_U, pc_H_success, bandwidth_SAT, N_H, user_pos, num_users)
-        # print(f"Requests handled by U2D link: {num_users - N_H - N_U}, D2D link: {N_U}, H2D link: {N_H}")
-        # print("Revenues as follows: ")
-        # print(RV_V)
-        # print(RV_U)
-        # print(RV_H)
-        # print(RV_comp)
+
+
         total_rev = eta_link* (RV_V + RV_U + RV_H) + eta_comp * (RV_comp)
 
         Power_U2D =  calculate_U2D_energy(pc_content_prob, q_U,q_V, range_v, pc_V_success, curr_cluster_labels, P_u_v, num_users, num_UAVs, uav_density)
         
         Power_D2D =  calculate_D2D_energy(pc_content_prob,current_requests, q_U, pr_V, pr_U, pc_U_success, P_U, num_users, num_UAVs)
         Power_H2D =  calculate_H2D_energy(pc_content_prob, pr_V,pr_U, pc_H_success, num_users, num_UAVs)
-        # print("Power as follows: ")
-
-        # print(Power_U2D)
-        # print(Power_D2D)
-        # print(Power_H2D)
-        # print(E_comp)
+       
         total_energy = vtheta_energy * (Power_U2D + Power_D2D + Power_H2D)
 
-        # print(total_rev - total_energy >= 0)
 
         total_profit += total_rev - total_energy
-        # print(f"D2D users: {N_U} and H2D users: {N_H}")
-        # print(f"Total profit for time slot {k+1} is: {total_profit}")
-        # print(f"RV comp is:  {RV_comp} and Energy Comp is: {E_comp}")
-    # print(f"Total profit over k is: {total_profit}")
 
     return total_profit
 
@@ -699,249 +801,186 @@ def fitness_func(position ,user_requests, user_pos, uav_pos, P_u_v_k, B_u_v_k, c
     return profit
 
 if __name__ == "__main__":
-    # num_users = 50
-    num_users= 100
+
+
+    num_UAVs= 8
     
+
+
     K = 20
-    uav_counts = []
-    totalprofits_random = []
-    totalprofits_whale = []
-    totalprofits_vulture = []
-    for num_UAVs in [6, 10, 14, 18]:
-        print("Running for UAVs:", num_UAVs)
-        
-        user_requests = generate_user_requests(K, num_users) # 1st param
-        user_pos = np.random.uniform(0, area_size, (num_users, 2)) # 2nd param
-        kmeans = KMeans(n_clusters=num_UAVs).fit(user_pos)
-        uav_pos = np.hstack([kmeans.cluster_centers_, np.random.uniform(*UAV_altitude_range, (num_UAVs, 1))]) # 5th param
-        uav_density = num_UAVs / area_size**2
-        tau_U = num_users / area_size**2
+    user_counts = [80, 100, 120, 140, 160]
+    totalprofits_random = [0 for _ in range(len(user_counts))]
+    totalprofits_whale = [0 for _ in range(len(user_counts))]
+    totalprofits_vulture = [0 for _ in range(len(user_counts))]
 
-        
-        # 1. Random Method
-        print("Computing Random Method Profit... ")
-        initial_cluster_labels_k = kmeans.labels_
-        initial_cluster_user_counts = np.bincount(initial_cluster_labels_k, minlength=num_UAVs) 
-        # 1.1 Random Caching
-        q_V = content_cached_prob(M_V)
-        q_U = content_cached_prob(M_U)
+    max_iters = 100
 
-        user_prefs = np.empty((K, num_users, num_UAVs))
-        uav_prefs = np.empty((K, num_UAVs, num_users))
+    for _ in range(max_iters):
 
-        for k in range(K):
-            user_pref, uav_pref = generate_preferences(user_pos, uav_pos, num_users, num_UAVs, q_V, user_requests, k ,uav_density)
-            user_prefs[k] = user_pref
-            uav_prefs[k] = uav_pref
+        for idx, num_users in enumerate(user_counts):
+            print("Running for User count:", num_users)
+            
+            user_requests = generate_user_requests(K, num_users) # 1st param
+            user_pos = np.random.uniform(0, area_size, (num_users, 2)) # 2nd param
+            kmeans = KMeans(n_clusters=num_UAVs).fit(user_pos)
+            uav_pos = np.hstack([kmeans.cluster_centers_, np.random.uniform(*UAV_altitude_range, (num_UAVs, 1))]) # 5th param
+            uav_density = num_UAVs / area_size**2
+            tau_U = num_users / area_size**2
 
-        cluster_labels = np.empty((K, num_users), dtype=int)
-        for k in range(K):
-            cluster_k = gale_shapley(user_prefs[k], uav_prefs[k], num_users, num_UAVs, P_V_total_max, P_V_max, user_pos, uav_pos)
-            cluster_labels[k] = cluster_k
+            
+            # 1. Random Method
+            print("Computing Random Method Profit... ")
+            initial_cluster_labels_k = kmeans.labels_
+            initial_cluster_user_counts = np.bincount(initial_cluster_labels_k, minlength=num_UAVs) 
+            # 1.1 Random Caching
+            q_V = content_cached_prob(M_V)
+            q_U = content_cached_prob(M_U)
 
-        initial_cluster_labels = [initial_cluster_labels_k for _ in range(K)]
-        
-        # 1.2 Power Allocation using Stable Matching
-        P_u_v_initial = np.empty((K, num_users, num_UAVs)) # 3rd param
-        for k in range(K):
-            P_u_v_initial[k] = optimize_power_allocation(user_pos, uav_pos, initial_cluster_labels[k], num_users, num_UAVs)
+            user_prefs = np.empty((K, num_users, num_UAVs))
+            uav_prefs = np.empty((K, num_UAVs, num_users))
 
-        # 1.3 Bandwidth Allocation
-        B_u_v_k_initial = np.empty((K, num_users, num_UAVs))
-        for k in range(K):
-            B_u_v = np.ones((num_users, num_UAVs)) 
-            for u in range(num_users):
-                v = initial_cluster_labels_k[u]
-                B_u_v[u, v] = system_bandwidth_UAV / initial_cluster_user_counts[v]
-            B_u_v_k_initial[k] = B_u_v
+            for k in range(K):
+                user_pref, uav_pref = generate_preferences(user_pos, uav_pos, num_users, num_UAVs, q_V, user_requests, k ,uav_density)
+                user_prefs[k] = user_pref
+                uav_prefs[k] = uav_pref
 
-        totalprofit = main(q_V, q_U, user_requests, user_pos, uav_pos, P_u_v_initial, B_u_v_k_initial, initial_cluster_labels, K, num_users, num_UAVs, uav_density, tau_U )
-        print(totalprofit)
+            cluster_labels = np.empty((K, num_users), dtype=int)
+            for k in range(K):
+                cluster_k = gale_shapley(user_prefs[k], uav_prefs[k], num_users, num_UAVs, P_V_total_max, P_V_max, user_pos, uav_pos)
+                cluster_labels[k] = cluster_k
 
-        # 2. Whale Optimization Method
-        print("Computing WOA Method Profit...")
-        # B_u_v_k = np.empty((K, num_users, num_UAVs)) # 3rd param
+            initial_cluster_labels = [initial_cluster_labels_k for _ in range(K)]
+            
+            # 1.2 Power Allocation using Stable Matching
+            P_u_v_initial = np.empty((K, num_users, num_UAVs)) # 3rd param
+            for k in range(K):
+                P_u_v_initial[k] = optimize_power_allocation(user_pos, uav_pos, initial_cluster_labels[k], num_users, num_UAVs)
 
-        # for k in range(K):
-        #     B_u_v = np.ones((num_users, num_UAVs)) 
-        #     for u in range(num_users):
-        #         v = cluster_labels[k,u]
-        #         B_u_v[u, v] = system_bandwidth_UAV / user_counts_per_iteration[k,v]
-        #     B_u_v_k[k] = B_u_v
+            # 1.3 Bandwidth Allocation
+            B_u_v_k_initial = np.empty((K, num_users, num_UAVs))
+            for k in range(K):
+                B_u_v = np.ones((num_users, num_UAVs)) 
+                for u in range(num_users):
+                    v = initial_cluster_labels_k[u]
+                    B_u_v[u, v] = system_bandwidth_UAV / initial_cluster_user_counts[v]
+                B_u_v_k_initial[k] = B_u_v
 
-        # #2.3 Power Allocation
-        # P_u_v_k = np.empty((K, num_users, num_UAVs)) # 3rd param
-        # for k in range(K):
-        #     P_u_v_k[k] = optimize_power_allocation(user_pos, uav_pos, cluster_labels[k], num_users, num_UAVs)
+            totalprofit = main(q_V, q_U, user_requests, user_pos, uav_pos, P_u_v_initial, B_u_v_k_initial, initial_cluster_labels, K, num_users, num_UAVs, uav_density, tau_U )
+            print(totalprofit)
 
+            # 2. Whale Optimization Method
+            print("Computing WOA Method Profit...")
+            
+            # 2.1 Caching using Whale Optimization Algorithm
+            optimal_solution2 = woa_optimizer(fitness_func, user_requests, user_pos, uav_pos, P_u_v_initial, B_u_v_k_initial, initial_cluster_labels, K, num_users, num_UAVs, uav_density, tau_U)
+            q_V = optimal_solution2[:total_contents]
+            q_U = optimal_solution2[total_contents:]
+            
+            user_prefs = np.empty((K, num_users, num_UAVs))
+            uav_prefs = np.empty((K, num_UAVs, num_users))
 
-        # 2.1 Caching using Whale Optimization Algorithm
-        optimal_solution2 = woa_optimizer(fitness_func, user_requests, user_pos, uav_pos, P_u_v_initial, B_u_v_k_initial, initial_cluster_labels, K, num_users, num_UAVs, uav_density, tau_U)
-        q_V = optimal_solution2[:total_contents]
-        q_U = optimal_solution2[total_contents:]
-        
-        user_prefs = np.empty((K, num_users, num_UAVs))
-        uav_prefs = np.empty((K, num_UAVs, num_users))
+            for k in range(K):
+                user_pref, uav_pref = generate_preferences(user_pos, uav_pos, num_users, num_UAVs, q_V, user_requests, k ,uav_density)
+                user_prefs[k] = user_pref
+                uav_prefs[k] = uav_pref
 
-        for k in range(K):
-            user_pref, uav_pref = generate_preferences(user_pos, uav_pos, num_users, num_UAVs, q_V, user_requests, k ,uav_density)
-            user_prefs[k] = user_pref
-            uav_prefs[k] = uav_pref
+            cluster_labels = np.empty((K, num_users), dtype=int)
+            for k in range(K):
+                cluster_k = gale_shapley(user_prefs[k], uav_prefs[k], num_users, num_UAVs, P_V_total_max, P_V_max, user_pos, uav_pos)
+                cluster_labels[k] = cluster_k
+            # 2.2 Bandwidth Allocation
+            B_u_v_k = np.empty((K, num_users, num_UAVs))
+            user_counts_per_iteration = np.empty((K, num_UAVs), dtype=int)
+            for k in range(K):
+                user_counts_per_iteration[k] = np.bincount(cluster_labels[k], minlength=num_UAVs)
 
-        cluster_labels = np.empty((K, num_users), dtype=int)
-        for k in range(K):
-            cluster_k = gale_shapley(user_prefs[k], uav_prefs[k], num_users, num_UAVs, P_V_total_max, P_V_max, user_pos, uav_pos)
-            cluster_labels[k] = cluster_k
-        # 2.2 Bandwidth Allocation
-        B_u_v_k = np.empty((K, num_users, num_UAVs))
-        user_counts_per_iteration = np.empty((K, num_UAVs), dtype=int)
-        for k in range(K):
-            user_counts_per_iteration[k] = np.bincount(cluster_labels[k], minlength=num_UAVs)
+            for k in range(K):
+                B_u_v = np.ones((num_users, num_UAVs)) 
+                for u in range(num_users):
+                    v = cluster_labels[k,u]
+                    B_u_v[u, v] = system_bandwidth_UAV / user_counts_per_iteration[k,v]
+                B_u_v_k[k] = B_u_v
 
-        for k in range(K):
-            B_u_v = np.ones((num_users, num_UAVs)) 
-            for u in range(num_users):
-                v = cluster_labels[k,u]
-                B_u_v[u, v] = system_bandwidth_UAV / user_counts_per_iteration[k,v]
-            B_u_v_k[k] = B_u_v
+            #2.3 Power Allocation
+            P_u_v_k = np.empty((K, num_users, num_UAVs)) # 3rd param
+            for k in range(K):
+                P_u_v_k[k] = optimize_power_allocation(user_pos, uav_pos, cluster_labels[k], num_users, num_UAVs)
 
-        #2.3 Power Allocation
-        P_u_v_k = np.empty((K, num_users, num_UAVs)) # 3rd param
-        for k in range(K):
-            P_u_v_k[k] = optimize_power_allocation(user_pos, uav_pos, cluster_labels[k], num_users, num_UAVs)
+            totalprofit2 = main(q_V, q_U, user_requests, user_pos, uav_pos, P_u_v_k, B_u_v_k, cluster_labels, K, num_users, num_UAVs, uav_density, tau_U)
+            print(totalprofit2)
+            
+            # 3. Vulture Method
+            print("Computing AVOA Method Profit...")
 
-        totalprofit2 = main(q_V, q_U, user_requests, user_pos, uav_pos, P_u_v_k, B_u_v_k, cluster_labels, K, num_users, num_UAVs, uav_density, tau_U)
-        print(totalprofit2)
-        
-        # 3. Vulture Method
-        print("Computing AVOA Method Profit...")
+            # P_u_v_k = P_V_max*np.ones((K, num_users, num_UAVs))
+            # B_u_v_k = (system_bandwidth_UAV)*np.ones((K, num_users, num_UAVs))
 
-        # P_u_v_k = P_V_max*np.ones((K, num_users, num_UAVs))
-        # B_u_v_k = (system_bandwidth_UAV)*np.ones((K, num_users, num_UAVs))
+            #3.1 Caching
 
-        #3.1 Caching
-
-        optimal_solution3 = avoa_optimizer(fitness_func, user_requests, user_pos, uav_pos, P_u_v_initial, B_u_v_k_initial, initial_cluster_labels, K, num_users, num_UAVs, uav_density, tau_U)
-        q_V = optimal_solution3[:total_contents]
-        q_U = optimal_solution3[total_contents:]
+            optimal_solution3 = avoa_optimizer(fitness_func, user_requests, user_pos, uav_pos, P_u_v_initial, B_u_v_k_initial, initial_cluster_labels, K, num_users, num_UAVs, uav_density, tau_U)
+            q_V = optimal_solution3[:total_contents]
+            q_U = optimal_solution3[total_contents:]
 
 
-        user_prefs = np.empty((K, num_users, num_UAVs))
-        uav_prefs = np.empty((K, num_UAVs, num_users))
+            user_prefs = np.empty((K, num_users, num_UAVs))
+            uav_prefs = np.empty((K, num_UAVs, num_users))
 
-        for k in range(K):
-            user_pref, uav_pref = generate_preferences(user_pos, uav_pos, num_users, num_UAVs, q_V, user_requests, k ,uav_density)
-            user_prefs[k] = user_pref
-            uav_prefs[k] = uav_pref
+            for k in range(K):
+                user_pref, uav_pref = generate_preferences(user_pos, uav_pos, num_users, num_UAVs, q_V, user_requests, k ,uav_density)
+                user_prefs[k] = user_pref
+                uav_prefs[k] = uav_pref
 
-        cluster_labels = np.empty((K, num_users), dtype=int)
-        for k in range(K):
-            cluster_k = gale_shapley(user_prefs[k], uav_prefs[k], num_users, num_UAVs, P_V_total_max, P_V_max, user_pos, uav_pos)
-            cluster_labels[k] = cluster_k
-        # 3.2 Bandwidth Allocation
-        B_u_v_k = np.empty((K, num_users, num_UAVs))
-        user_counts_per_iteration = np.empty((K, num_UAVs), dtype=int)
-        for k in range(K):
-            user_counts_per_iteration[k] = np.bincount(cluster_labels[k], minlength=num_UAVs)
+            cluster_labels = np.empty((K, num_users), dtype=int)
+            for k in range(K):
+                cluster_k = gale_shapley(user_prefs[k], uav_prefs[k], num_users, num_UAVs, P_V_total_max, P_V_max, user_pos, uav_pos)
+                cluster_labels[k] = cluster_k
+            # 3.2 Bandwidth Allocation
+            B_u_v_k = np.empty((K, num_users, num_UAVs))
+            user_counts_per_iteration = np.empty((K, num_UAVs), dtype=int)
+            for k in range(K):
+                user_counts_per_iteration[k] = np.bincount(cluster_labels[k], minlength=num_UAVs)
 
-        for k in range(K):
-            B_u_v = np.ones((num_users, num_UAVs)) 
-            for u in range(num_users):
-                v = cluster_labels[k,u]
-                B_u_v[u, v] = system_bandwidth_UAV / user_counts_per_iteration[k,v]
-            B_u_v_k[k] = B_u_v
+            for k in range(K):
+                B_u_v = np.ones((num_users, num_UAVs)) 
+                for u in range(num_users):
+                    v = cluster_labels[k,u]
+                    B_u_v[u, v] = system_bandwidth_UAV / user_counts_per_iteration[k,v]
+                B_u_v_k[k] = B_u_v
 
-        #3.3 Power Allocation
-        P_u_v_k = np.empty((K, num_users, num_UAVs)) # 3rd param
-        for k in range(K):
-            P_u_v_k[k] = optimize_power_allocation(user_pos, uav_pos, cluster_labels[k], num_users, num_UAVs)
-   
-        totalprofit3 = main(q_V, q_U, user_requests, user_pos, uav_pos, P_u_v_k, B_u_v_k, cluster_labels, K, num_users, num_UAVs, uav_density, tau_U)
-        print(totalprofit3)
+            #3.3 Power Allocation
+            P_u_v_k = np.empty((K, num_users, num_UAVs)) # 3rd param
+            for k in range(K):
+                P_u_v_k[k] = optimize_power_allocation(user_pos, uav_pos, cluster_labels[k], num_users, num_UAVs)
+    
+            totalprofit3 = main(q_V, q_U, user_requests, user_pos, uav_pos, P_u_v_k, B_u_v_k, cluster_labels, K, num_users, num_UAVs, uav_density, tau_U)
+            print(totalprofit3)
 
+            totalprofits_random[idx] += totalprofit
+            totalprofits_whale[idx] += totalprofit2
+            totalprofits_vulture[idx] += totalprofit3
+            # totalprofits_whale.append(totalprofit2)
+            # totalprofits_vulture.append(totalprofit3)
 
-
-        uav_counts.append(num_UAVs)
-        totalprofits_random.append(totalprofit)
-        totalprofits_whale.append(totalprofit2)
-        totalprofits_vulture.append(totalprofit3)
+    totalprofits_whale = totalprofits_whale / max_iters
+    totalprofits_random = totalprofits_random / max_iters
+    totalprofits_vulture = totalprofits_vulture / max_iters
 
     plt.figure(figsize=(10, 6))
-    plt.plot(uav_counts, totalprofits_random, 'b-o', label='Random Method', linewidth=2)
-    plt.plot(uav_counts, totalprofits_whale, 'r--s', label='Whale Optimization', linewidth=2)
-    plt.plot(uav_counts, totalprofits_vulture, 'g-.D', label='Vulture Optimization', linewidth=2)
+    plt.plot(user_counts, totalprofits_random, 'b-o', label='Random Method', linewidth=2)
+    plt.plot(user_counts, totalprofits_whale, 'r--s', label='Whale Optimization', linewidth=2)
+    plt.plot(user_counts, totalprofits_vulture, 'g-.D', label='Vulture Optimization', linewidth=2)
 
-    plt.xlabel('Number of UAVs', fontsize=12)
+    plt.xlabel('Number of Users', fontsize=12)
     plt.ylabel('Total Profit', fontsize=12)
     plt.title("System Performance Comparison", fontsize=14)
-    plt.xticks(uav_counts, fontsize=10)
+    plt.xticks(user_counts, fontsize=10)
     plt.yticks(fontsize=10)
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.legend(fontsize=10)
     plt.tight_layout()
 
     # Save and show
-    filename = "profitVsUavs_user"+str(num_users) + ".png"
+    filename = "profit_vs_users_num_uavs"+str(num_users) + ".png"
     plt.savefig(filename, dpi=300)
     plt.show()
 
-
-
-# def run_simulation(num_users, num_UAVs, q_V, q_U, user_requests,user_pos, K):
-#     # user_requests = generate_user_requests(K, num_users)
-#     # user_pos = np.random.uniform(0, area_size, (num_users, 2))
-#     kmeans = KMeans(n_clusters=num_UAVs).fit(user_pos)
-#     cluster_labels = kmeans.labels_
-#     cluster_user_counts = np.bincount(cluster_labels, minlength=num_UAVs) 
-
-#     uav_pos = np.hstack([kmeans.cluster_centers_, np.random.uniform(*UAV_altitude_range, (num_UAVs, 1))])
-
-#     # q_V = content_cached_prob(M_V)
-#     # q_U = content_cached_prob(M_U)
-    
-#     P_u_v = 0.1 * np.ones((num_users, num_UAVs))
-#     B_u_v = np.zeros((num_users, num_UAVs))
-    
-#     for u in range(num_users):
-#         v = cluster_labels[u]
-#         B_u_v[u, v] = min(system_bandwidth_UAV / cluster_user_counts[v], 1e8)
-
-#     uav_density = num_UAVs / area_size**2
-#     tau_U = num_users / area_size**2
-#     profit = main(q_V, q_U, user_requests, user_pos, uav_pos, P_u_v, B_u_v, cluster_labels, K, num_users, num_UAVs, uav_density, tau_U)
-#     return profit
-
-
-# num_users_list = range(100 , 1000 ,100)
-# uav_numbers = [20 ,40 , 60]
-# colors = ['r', 'g', 'b']
-# plt.figure(figsize=(10, 6))
-
-# q_V = content_cached_prob(M_V)
-# q_U = content_cached_prob(M_U)
-
-
-# prof_arr = np.zeros((len(uav_numbers) , len(num_users_list)))
-
-# for didx, num_users in enumerate(num_users_list):
-#     K = 100
-#     user_requests = generate_user_requests(K, num_users)
-#     user_pos = np.random.uniform(0, area_size, (num_users, 2))
-
-#     for uidx, num_uav in enumerate(uav_numbers):
-#         profit = run_simulation(num_users, num_uav, q_V, q_U, user_requests,user_pos, K )
-#         prof_arr[uidx,didx] = profit
-
-
-# for idx, num_UAVs in enumerate(uav_numbers):
-#     profits = prof_arr[idx, 0:]
-#     plt.plot(num_users_list, profits, marker='o', color=colors[idx % len(colors)], label=f'{num_UAVs} UAVs')
-
-
-# plt.xlabel('Number of Users')
-# plt.ylabel('Total Profit')
-# plt.title('Total Profit vs Number of Users for Different UAV Counts')
-# plt.legend()
-# plt.grid(True)
-# # plt.show()
-# plt.savefig("output.jpg")

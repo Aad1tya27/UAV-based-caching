@@ -51,7 +51,7 @@ class Vulture:
 
 def avoa_optimizer(fitness_func, user_requests, user_pos, uav_pos, P_u_v_k, 
                    B_u_v_k, cluster_labels, K, num_users, num_UAVs, 
-                   uav_density, tau_U, max_iter=30, n_vultures=30):
+                   uav_density, tau_U, max_iter=30, n_vultures=30, omega = 0.5):
     print("Initializing Vulture Optimization")
     # AVOA parameters
     p1 = 0.6    # Exploration parameter
@@ -64,7 +64,7 @@ def avoa_optimizer(fitness_func, user_requests, user_pos, uav_pos, P_u_v_k,
     population = [Vulture(dim, i) for i in range(n_vultures)]
     fitness = [fitness_func(v.position, user_requests, user_pos, uav_pos, 
                            P_u_v_k, B_u_v_k, cluster_labels, K, num_users, 
-                           num_UAVs, uav_density, tau_U) for v in population]
+                           num_UAVs, uav_density, tau_U, omega) for v in population]
     print("Initial Vultures Computed ...")
 
     # Sort and select best vultures
@@ -130,7 +130,7 @@ def avoa_optimizer(fitness_func, user_requests, user_pos, uav_pos, P_u_v_k,
             # Update fitness
             new_fitness = fitness_func(vulture.position, user_requests, user_pos, 
                                       uav_pos, P_u_v_k, B_u_v_k, cluster_labels, 
-                                      K, num_users, num_UAVs, uav_density, tau_U)
+                                      K, num_users, num_UAVs, uav_density, tau_U, omega)
             
             # Update best solutions
             if new_fitness > fitness[sorted_idx[0]]:
