@@ -19,7 +19,7 @@ area_size = 500
 
 
 total_area = area_size ** 2
-UAV_altitude_range = (60, 80)  # meters
+UAV_altitude_range = (60, 60)  # meters
 sigma2_dBm = -174  # dBm
 sigma2 = 10**((sigma2_dBm - 30)/10)
 rho_UAV = -1
@@ -159,13 +159,12 @@ def satellite_path_loss(d_horizontal, f_c= 2e9, l_los = 0 , l_nlos = 20):
 
 # -------------------- Success Probabilities ------------------
 
-def U2D_succes_prob(q, u, uav_pos, user_pos, c, P,num_UAVs, uav_density, v,max_radius=500):
+def U2D_succes_prob(q, u, uav_pos, user_pos, c, P, num_UAVs, uav_density, v, max_radius=500, num_users=None):
+    # Ensure u is within valid range
+    if num_users is not None and u >= num_users:
+        return 0  # Return 0 probability for invalid user indices
     
-    # distances = [np.linalg.norm(uav - np.append(user_pos[u], 0  )) for uav in uav_pos]
-    # v = np.argmin(distances)
-    # print(uav_pos[v,2])
     q_i_V = q[c]
-    # print("yo")
     sigma = sigma2
     if q_i_V == 0 or P == 0: return 0
 
@@ -216,7 +215,11 @@ def D2D_succes_prob(q_U, u, user_pos, c, P_U, tau_U, num_users):
     result, _ = quad(integrand, 0,  range_u)
     return min(2* np.pi * tau_U * q_u_U *result, 1)
 
-def H2D_succes_prob(u, user_pos):
+def H2D_succes_prob(u, user_pos, num_users=None):
+    # Ensure u is within valid range
+    if num_users is not None and u >= num_users:
+        return 0  # Return 0 probability for invalid user indices
+    
     sigma = sigma2
     # PL_u = satellite_path_loss(np.linalg.norm(user_pos[u] - SAT_pos[:2]))
     # z0 = (10**(PL_u/10) * sigma * rho_H2D) / P_H
@@ -242,9 +245,15 @@ def H2D_succes_prob(u, user_pos):
 
 def U2D_sinr_vectorized(P_matrix, uav_pos, user_pos, omega=1):
     sigma = sigma2 
+    
+    # Get the number of users from the power matrix shape
+    num_users = P_matrix.shape[0]
+    
+    # Ensure we only use the first num_users from user_pos
+    user_pos_subset = user_pos[:num_users]
 
-    delta_pos = user_pos[:, np.newaxis, :2] - uav_pos[np.newaxis, :, :2]
-    r = np.linalg.norm(delta_pos, axis=2) 
+    delta_pos = user_pos_subset[:, np.newaxis, :2] - uav_pos[np.newaxis, :, :2]
+    r = np.linalg.norm(delta_pos, axis=2)
     
     altitudes = uav_pos[:, 2]  
     distances = np.sqrt(r**2 + altitudes**2)  
@@ -266,7 +275,11 @@ def U2D_sinr_vectorized(P_matrix, uav_pos, user_pos, omega=1):
     
     return sinr_matrix
 
-def U2D_sinr(u ,v ,P, uav_pos, user_pos, omega = 1 ):
+def U2D_sinr(u, v, P, uav_pos, user_pos, omega=1, num_users=None):
+    # Ensure u is within valid range
+    if num_users is not None and u >= num_users:
+        return 0  # Return 0 SINR for invalid user indices
+    
     sigma = sigma2 
     # gamma_sample = np.random.gamma(shape=m0, scale=omega/m0)
     # g_h_u = np.sqrt(gamma_sample)
@@ -289,7 +302,10 @@ def U2D_sinr(u ,v ,P, uav_pos, user_pos, omega = 1 ):
 
 def D2D_sinr_vectorized(user_pos, P_U, bandwidth_users, num_users, omega=1):
     
-    delta = user_pos[:, np.newaxis, :] - user_pos[np.newaxis, :, :]
+    # Ensure we only use the first num_users from user_pos
+    user_pos_subset = user_pos[:num_users]
+    
+    delta = user_pos_subset[:, np.newaxis, :] - user_pos_subset[np.newaxis, :, :]
     dist_matrix = np.linalg.norm(delta, axis=2)
     np.fill_diagonal(dist_matrix, np.inf)  # Exclude self
     
@@ -302,7 +318,7 @@ def D2D_sinr_vectorized(user_pos, P_U, bandwidth_users, num_users, omega=1):
     interf_matrix = P_U * omega * (dist_matrix ** -beta_pl)
     interference = np.sum(interf_matrix * mask, axis=1)
     
-    sat_distances = np.linalg.norm(user_pos - SAT_pos[:2], axis=1)
+    sat_distances = np.linalg.norm(user_pos_subset - SAT_pos[:2], axis=1)
     PL_vector = np.vectorize(satellite_path_loss)(sat_distances)
     sat_interference = P_H * omega * 10 ** (-PL_vector / 10)
     
@@ -348,10 +364,16 @@ def D2D_sinr_vectorized(user_pos, P_U, bandwidth_users, num_users, omega=1):
 #     return sinr
 
 
-def H2D_sinr_vectorized(user_pos, omega=1):
+def H2D_sinr_vectorized(user_pos, omega=1, num_users=None):
+    # If num_users is not provided, use the full user_pos array
+    if num_users is None:
+        num_users = user_pos.shape[0]
+    
+    # Ensure we only use the first num_users from user_pos
+    user_pos_subset = user_pos[:num_users]
 
     sat_pos_2d = np.array(SAT_pos[:2])
-    delta = user_pos - sat_pos_2d[np.newaxis, :]
+    delta = user_pos_subset - sat_pos_2d[np.newaxis, :]
     distances = np.linalg.norm(delta, axis=1)
     
     PL = np.vectorize(satellite_path_loss)(distances)
@@ -372,26 +394,21 @@ def H2D_sinr_vectorized(user_pos, omega=1):
 #     return received_power / noise
 
 # ------------------ THROUGHPUT CALCULATION ---------------------
-def calculate_U2D_throughput(pc_i, q_U,q_V, range_v, pc_V_success, B_u_v, cluster_labels, P_matrix, user_pos, uav_pos , num_users, num_UAVs, uav_density):
-    # ans = 0
-    # for i in range(total_contents):
-    #     temp  = 0
-    #     for u in range(num_users):
-    #         v = cluster_labels[u]
-    #         temp += pc_V_success[i, u]*  B_u_v[u,v] * np.log2(1 + U2D_sinr(u ,v,P[u,v], uav_pos, user_pos))
-    #     ans += temp * pc_i[i] * ( 1 - q_U[i] ) * (1 - np.exp( - uav_density * q_V[i] * np.pi * range_v**2 ))
-    # return ans
-    sinr_matrix = U2D_sinr_vectorized(P_matrix, uav_pos, user_pos)
+def calculate_U2D_throughput(pc_i, q_U,q_V, range_v, pc_V_success, cluster_labels, P, user_pos, uav_pos, num_users, num_UAVs, uav_density):
+    # Get SINR for valid users only
+    sinr_matrix = U2D_sinr_vectorized(P, uav_pos, user_pos)
 
+    # Only use indices up to num_users
     user_indices = np.arange(num_users)
-    assigned_v = cluster_labels
+    assigned_v = cluster_labels[:num_users]  # Only take assignments for valid users
     sinr_assigned = sinr_matrix[user_indices, assigned_v]
     B_assigned = B_u_v[user_indices, assigned_v]
     
     log_sinr = np.log2(1 + sinr_assigned)
     
     cache_term = (1 - q_U) * (1 - np.exp(-uav_density * q_V * np.pi * range_v**2))
-    user_terms = pc_V_success * B_assigned * log_sinr
+    # Only use success probabilities for valid users
+    user_terms = pc_V_success[:, :num_users] * B_assigned * log_sinr
     
     throughput = np.sum(pc_i[:, np.newaxis] * cache_term[:, np.newaxis] * user_terms)
     
@@ -400,34 +417,23 @@ def calculate_U2D_throughput(pc_i, q_U,q_V, range_v, pc_V_success, B_u_v, cluste
 def calculate_D2D_throughput(pc_i, q_U, pr_V, pr_U, pc_U_success, B_D2D, N_D, P_U, user_pos, num_users):
     if N_D == 0:
         return 0.0
-    throughput = 0.0
-
+    
+    # Get SINR for valid users only
     sinr_vals, nearest_idx = D2D_sinr_vectorized(user_pos, P_U, B_D2D, num_users)
-
-    # for i in range(total_contents):
-    #     temp = 0
-    #     for u in range(num_users):
-    #         if pc_U_success[i, u] == 0: continue
-    #         distances = [np.linalg.norm(user_pos[u] - user_pos[m]) for m in range(num_users) if m != u]
-    #         m = np.argmin(distances)
-    #         sinr = D2D_sinr(u, m, user_pos, P_U, bandwidth_per_user, num_users)
-    #         sinr = min(sinr, 1e3)  # Maximum realistic SINR of 30 dB
-    #         temp += pc_U_success[i, u] * bandwidth_per_user * np.log2(1 + sinr)
-
-    #     throughput += temp * pc_i[i] * (1 - q_U[i]) * (1 - pr_V[i]) * pr_U[i]
-
-    # return throughput
+    
+    # Only consider valid users
+    sinr_vals = sinr_vals[:num_users]
     N_D = np.sum(sinr_vals > 0)
     if N_D == 0:
         return 0.0
     
     bandwidth_per_user = B_D2D / N_D
-    
     rates = bandwidth_per_user * np.log2(1 + sinr_vals)
     
     content_term = pc_i[:, np.newaxis] * (1 - q_U[:, np.newaxis])
     prob_term = (1 - pr_V[:, np.newaxis]) * pr_U[:, np.newaxis]
-    success_term = pc_U_success * rates[np.newaxis, :]
+    # Only use success probabilities for valid users
+    success_term = pc_U_success[:, :num_users] * rates[np.newaxis, :]
     
     throughput = np.sum(content_term * prob_term * success_term)
     
@@ -436,25 +442,17 @@ def calculate_D2D_throughput(pc_i, q_U, pr_V, pr_U, pc_U_success, B_D2D, N_D, P_
 def calculate_H2D_throughput(pc_i, pr_V, pr_U, pc_H_success, B_H2D, N_H, user_pos, num_users):
     if N_H == 0:
         return 0.0
-    throughput = 0.0
+    
     bandwidth_per_user = B_H2D / N_H
-
-    # for i in range(total_contents):
-    #     temp = 0
-    #     for u in range(num_users):
-    #         if pc_H_success[i,u] == 0: continue
-    #         snr = H2D_sinr(u, user_pos)
-    #         temp += pc_H_success[i, u] * bandwidth_per_user * np.log2(1 + snr)
-    #     throughput += temp * pc_i[i] * (1 - pr_V[i]) * (1 - pr_U[i])
-    # return throughput
-
-    sinr = H2D_sinr_vectorized(user_pos)  # (num_users,)
-
+    
+    # Get SINR for valid users only
+    sinr = H2D_sinr_vectorized(user_pos, num_users=num_users)  # This already handles num_users
     log_sinr = np.log2(1 + sinr)  # (num_users,)
     rate_matrix = bandwidth_per_user * log_sinr[np.newaxis, :]  # (1, num_users)
     
     content_factors = pc_i[:, np.newaxis] * (1 - pr_V[:, np.newaxis]) * (1 - pr_U[:, np.newaxis])  # (total_contents, 1)
-    success_rates = pc_H_success * rate_matrix  # (total_contents, num_users)
+    # Only use success probabilities for valid users
+    success_rates = pc_H_success[:, :num_users] * rate_matrix  # (total_contents, num_users)
     
     throughput = np.sum(content_factors * success_rates)
     
@@ -463,12 +461,14 @@ def calculate_H2D_throughput(pc_i, pr_V, pr_U, pc_H_success, B_H2D, N_H, user_po
 # -------------------- Energy Calculation ----------------------------
 
 def calculate_U2D_energy(pc_i, q_U,q_V, range_v, pc_V_success, cluster_labels, P, num_users, num_UAVs, uav_density):
+    # Only use indices up to num_users
     user_indices = np.arange(num_users)
-    assigned_v = cluster_labels
+    assigned_v = cluster_labels[:num_users]  # Only take assignments for valid users
     P_assigned = P[user_indices, assigned_v]
 
     constant_term = pc_i * (1 - q_U) * (1 - np.exp( - uav_density * q_V * np.pi * range_v**2 ))
-    sum_per_content = np.sum(pc_V_success * P_assigned, axis=1)  # Sum over users for each content
+    # Only use success probabilities for valid users
+    sum_per_content = np.sum(pc_V_success[:, :num_users] * P_assigned, axis=1)  # Sum over users for each content
 
     return np.sum(sum_per_content * constant_term)
 
@@ -483,44 +483,33 @@ def calculate_U2D_energy(pc_i, q_U,q_V, range_v, pc_V_success, cluster_labels, P
     # return energy
 
 def calculate_D2D_energy(pc_i, current_requests, q_U, pr_V, pr_U, pc_U_success, P_U, num_users, num_UAVs):
-    # energy = 0.0
-    # for u in range(num_users):
-    #     req_type, req_content = current_requests[u]
-    #     if req_type != 1:  # Skip computation requests
-    #         continue
-    #     c = int(req_content - 1)  # Content index (0-based)
-    #     if pc_U_success[c, u] == 0:
-    #         continue
-    #     energy_term = pc_i[c] * (1 - q_U[c]) * (1 - pr_V[c]) * pr_U[c]
-    #     energy += pc_U_success[c, u] * P_U * energy_term
-    # return energy
-    mask = (current_requests[:, 0] == 1)
+    # Only consider users up to num_users
+    mask = (current_requests[:num_users, 0] == 1)
     users_with_content = np.where(mask)[0]
     if users_with_content.size == 0:
         return 0.0
+        
     c_indices = current_requests[users_with_content, 1].astype(int) - 1
 
+    # Only use success probabilities for valid users
     selected_pc_U_success = pc_U_success[c_indices, users_with_content]
     energy_terms = selected_pc_U_success * P_U
     energy_terms *= pc_i[c_indices] * (1 - q_U[c_indices]) * (1 - pr_V[c_indices]) * pr_U[c_indices]
     return np.sum(energy_terms)
 
 def calculate_H2D_energy(pc_i, pr_V, pr_U, pc_H_success, num_users, num_UAVs): 
-    # energy = 0.0
-    # for i in range(total_contents):
-    #     temp = 0
-    #     for u in range(num_users):
-    #         if pc_H_success[i,u] == 0: continue
-    #         temp += pc_H_success[i, u] * P_H
-    #     energy += temp * pc_i[i] * (1 - pr_V[i]) * (1 - pr_U[i])
-    # return energy
-    sum_per_content = np.sum(pc_H_success, axis=1) * P_H  # Sum over users and multiply by P_H
+    # Only use success probabilities for valid users
+    sum_per_content = np.sum(pc_H_success[:, :num_users], axis=1) * P_H  # Sum over valid users and multiply by P_H
     energy_terms = sum_per_content * pc_i * (1 - pr_V) * (1 - pr_U)
     return np.sum(energy_terms)
     
 # _____________________ COMPUTATION FUNCTIONS _______________________________
 
-def compute_p_los(u, v, user_pos, uav_pos):
+def compute_p_los(u, v, user_pos, uav_pos, num_users=None):
+    # Ensure u is within valid range
+    if num_users is not None and u >= num_users:
+        return 0  # Return 0 probability for invalid user indices
+    
     z_v = uav_pos[v, 2]
     dist = np.sqrt((np.linalg.norm(user_pos[u] - uav_pos[v, 0:2]))**2 + z_v**2)
     phi_u_v = np.arcsin(z_v/dist)
@@ -532,7 +521,11 @@ def compute_path_loss(p_los, d_u_v_k, f_c = 2e9, d0 = 1, eta_los = 3, eta_nlos =
     return (p_los*(eta_los - eta_nlos) + eta_nlos) * term
 
 
-def computation_UAV_sinr(P_U, u ,v ,user_pos, uav_pos, beta0 = 1e-4, delta_dbm = -90):
+def computation_UAV_sinr(P_U, u, v, user_pos, uav_pos, num_users=None, beta0=1e-4, delta_dbm=-90):
+    # Ensure u is within valid range
+    if num_users is not None and u >= num_users:
+        return 0  # Return 0 SINR for invalid user indices
+    
     delta = 10**((delta_dbm-30)/10)
     z_v = uav_pos[v, 2]
     dist = np.sqrt((np.linalg.norm(user_pos[u] - uav_pos[v, 0:2]))**2 + z_v**2)
@@ -585,8 +578,8 @@ def generate_preferences(user_pos, uav_pos, num_users, num_UAVs, q_V, user_reque
             user_req = user_requests[k,u]
             if user_req[0] == 1:
                 c = int(user_req[1] - 1)
-                suc_prob = U2D_succes_prob(q_V, u, uav_pos, user_pos, c, P_max, num_UAVs, uav_density, v)
-                sinr = U2D_sinr(u, v, P_max, uav_pos, user_pos)
+                suc_prob = U2D_succes_prob(q_V, u, uav_pos, user_pos, c, P_max, num_UAVs, uav_density, v, num_users=num_users)
+                sinr = U2D_sinr(u, v, P_max, uav_pos, user_pos, num_users=num_users)
                 throughput = suc_prob * q_V[c] * np.log2(1 + sinr)
                 datarate.append(throughput)
             else: datarate.append(0)
@@ -596,9 +589,9 @@ def generate_preferences(user_pos, uav_pos, num_users, num_UAVs, q_V, user_reque
     return user_prefs, uav_prefs
 
 
-def gale_shapley(user_prefs, uav_prefs, num_users, num_UAVs, P_V_total_max_dbm, P_V_max, user_pos, uav_pos):
+def gale_shapley(user_prefs, uav_prefs, num_users, num_UAVs, P_V_total_max, P_V_max, user_pos, uav_pos):
 
-    quota_per_uav = math.floor(P_V_total_max_dbm / P_V_max)
+    quota_per_uav = math.floor(P_V_total_max / P_V_max)
     
     # Build a ranking matrix for each UAV:
     # rank_matrix[v, u] gives the rank of user u for UAV v (lower value means higher preference).
@@ -671,16 +664,18 @@ def gale_shapley(user_prefs, uav_prefs, num_users, num_UAVs, P_V_total_max_dbm, 
 
 def optimize_power_allocation(user_pos, uav_pos, cluster_labels, num_users, num_UAVs):
     P_u_v = np.zeros((num_users, num_UAVs))
-    # cluster_user_counts = np.bincount(cluster_labels, minlength=num_UAVs)
     
     for v in range(num_UAVs):
         users_in_v = np.where(cluster_labels == v)[0]
-        total_power = P_V_max * len(users_in_v)
-        if total_power > P_V_total_max:
-            scale_factor = P_V_total_max / total_power
-            P_u_v[users_in_v, v] = P_V_max * scale_factor
-        else:
-            P_u_v[users_in_v, v] = P_V_max
+        if len(users_in_v) > 0:
+            distances = [np.linalg.norm(uav_pos[v, :2] - user_pos[u]) for u in users_in_v]
+            
+            sorted_indices = np.argsort(distances)
+            sorted_users = users_in_v[sorted_indices]            
+            max_users_with_power = int(P_V_total_max / P_V_max)
+            
+            P_u_v[sorted_users[:max_users_with_power], v] = P_V_max            
+    
     return P_u_v
 
 # def update_bandwidth_allocation(cluster_labels, num_users, num_UAVs):
@@ -729,7 +724,7 @@ def main(q_V, q_U ,user_requests, user_pos, uav_pos, P_u_v_k, B_u_v_k, cluster_l
             if user_req[0] == 1:
                 distances = [np.linalg.norm(uav - np.append(user_pos[u], 0  )) for uav in uav_pos]
                 v = np.argmin(distances)
-                res_U2D = U2D_succes_prob(q_V, u, uav_pos, user_pos, int(user_req[1]-1), P_u_v[u,v], num_UAVs, uav_density, v)
+                res_U2D = U2D_succes_prob(q_V, u, uav_pos, user_pos, int(user_req[1]-1), P_u_v[u,v], num_UAVs, uav_density, v, num_users=num_users)
                 if res_U2D > 0:
                     pc_V_success[int(user_req[1]-1), u] = res_U2D
                     continue
@@ -739,7 +734,7 @@ def main(q_V, q_U ,user_requests, user_pos, uav_pos, P_u_v_k, B_u_v_k, cluster_l
                     pc_U_success[int(user_req[1]-1), u] = res_D2D
                     continue
                 N_H += 1   
-                res_H2D = H2D_succes_prob(u , user_pos)
+                res_H2D = H2D_succes_prob(u , user_pos, num_users)
                 pc_H_success[int(user_req[1]-1), u] = res_H2D
             elif user_req[0] == 0:
                 distances = [np.linalg.norm(uav_pos[v, 0:2] - user_pos[u]) for v in range(num_UAVs)]
@@ -758,7 +753,7 @@ def main(q_V, q_U ,user_requests, user_pos, uav_pos, P_u_v_k, B_u_v_k, cluster_l
             required_cycles = mu_v * task_size
             if required_cycles <= tau_comp * f_max_v:
                 
-                sinr = computation_UAV_sinr(P_U, u,v, user_pos, uav_pos)
+                sinr = computation_UAV_sinr(P_U, u, v, user_pos, uav_pos, num_users=num_users)
 
                 rate = B_u_v[u,v]  * np.log2(1 + sinr)
                 RV_comp +=  rate
@@ -771,7 +766,7 @@ def main(q_V, q_U ,user_requests, user_pos, uav_pos, P_u_v_k, B_u_v_k, cluster_l
                 rate = (bandwidth_SAT/10) * np.log2(1 + snr)
                 RV_comp += rate
 
-        RV_V = calculate_U2D_throughput(pc_content_prob, q_U,q_V, range_v, pc_V_success, B_u_v, curr_cluster_labels, P_u_v, user_pos, uav_pos, num_users, num_UAVs, uav_density )
+        RV_V = calculate_U2D_throughput(pc_content_prob, q_U,q_V, range_v, pc_V_success, curr_cluster_labels, P_u_v, user_pos, uav_pos, num_users, num_UAVs, uav_density )
         RV_U = calculate_D2D_throughput(pc_content_prob, q_U, pr_V, pr_U, pc_U_success, bandwidth_users, N_U, P_U, user_pos, num_users)
         RV_H = calculate_H2D_throughput(pc_content_prob, pr_V, pr_U, pc_H_success, bandwidth_SAT, N_H, user_pos, num_users)
 
@@ -803,33 +798,35 @@ def fitness_func(position ,user_requests, user_pos, uav_pos, P_u_v_k, B_u_v_k, c
 if __name__ == "__main__":
 
 
-    num_UAVs= 3
+    num_UAVs= 4
     
 
     K = 10
-    user_counts = [20, 30, 40, 50]
+    user_counts = [30, 40, 50, 60]
     totalprofits_random = np.zeros(len(user_counts))
     totalprofits_whale = np.zeros(len(user_counts))
     totalprofits_vulture = np.zeros(len(user_counts))
 
-    max_iters = 50
+    max_iters = 1
+    user_requests_all = generate_user_requests(K, max(user_counts)) # 1st param
+    user_pos_all = np.random.uniform(0, area_size, (max(user_counts), 2)) # 2nd param
+    kmeans_all = KMeans(n_clusters=num_UAVs).fit(user_pos_all)
+    uav_pos = np.hstack([kmeans_all.cluster_centers_, np.random.uniform(*UAV_altitude_range, (num_UAVs, 1))]) # 5th param
+    uav_density = num_UAVs / area_size**2
 
     for _ in range(max_iters):
         print(f"Iteration {_+1}/{max_iters}")
         for idx, num_users in enumerate(user_counts):
+            user_pos = user_pos_all[:num_users]
+            user_requests = user_requests_all[:K, :num_users, :]  # Get requests for all K time slots up to num_users
+            
             print("Running for User count:", num_users)
             
-            user_requests = generate_user_requests(K, num_users) # 1st param
-            user_pos = np.random.uniform(0, area_size, (num_users, 2)) # 2nd param
-            kmeans = KMeans(n_clusters=num_UAVs).fit(user_pos)
-            uav_pos = np.hstack([kmeans.cluster_centers_, np.random.uniform(*UAV_altitude_range, (num_UAVs, 1))]) # 5th param
-            uav_density = num_UAVs / area_size**2
             tau_U = num_users / area_size**2
-
             
             # 1. Random Method
             print("Computing Random Method Profit... ")
-            initial_cluster_labels_k = kmeans.labels_
+            initial_cluster_labels_k = kmeans_all.labels_[:num_users]  # Only take labels for num_users
             initial_cluster_user_counts = np.bincount(initial_cluster_labels_k, minlength=num_UAVs) 
             # 1.1 Random Caching
             q_V = content_cached_prob(M_V)
@@ -967,10 +964,10 @@ if __name__ == "__main__":
     plt.figure(figsize=(10, 6))
     
     # Add origin point (0,0) to each data series
-    user_counts_with_origin = [0] + user_counts
-    random_with_origin = [0] + list(totalprofits_random)
-    whale_with_origin = [0] + list(totalprofits_whale)
-    vulture_with_origin = [0] + list(totalprofits_vulture)
+    user_counts_with_origin = user_counts
+    random_with_origin =  list(totalprofits_random)
+    whale_with_origin = list(totalprofits_whale)
+    vulture_with_origin = list(totalprofits_vulture)
     
     plt.plot(user_counts_with_origin, random_with_origin, 'b-o', label='Random Method', linewidth=2)
     plt.plot(user_counts_with_origin, whale_with_origin, 'r--s', label='Whale Optimization', linewidth=2)

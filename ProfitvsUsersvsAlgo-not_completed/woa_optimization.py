@@ -24,7 +24,7 @@ tau_U = num_users / area_size**2
     
 user_pos = np.random.uniform(0, area_size, (num_users, 2)) # 2nd param
         
-kmeans = KMeans(n_clusters=num_UAVs).fit(user_pos)
+kmeans = KMeans(n_clusters=num_UAVs).fit(user_pos[:num_users])  # Only fit on valid users
 cluster_labels = kmeans.labels_
 cluster_user_counts = np.bincount(cluster_labels, minlength=num_UAVs) 
 uav_pos = np.hstack([kmeans.cluster_centers_, np.random.uniform(*UAV_altitude_range, (num_UAVs, 1))]) # 5th param
