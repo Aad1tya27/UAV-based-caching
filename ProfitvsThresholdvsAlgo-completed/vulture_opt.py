@@ -147,8 +147,6 @@ def avoa_optimizer(fitness_func, user_requests, user_pos, uav_pos, P_u_v_k,
         else:
             repeats = 0
             prev_iter_profit = fitness[sorted_idx[0]]
-        
-   
         print(f"Iteration {iter+1}: Best Profit = {fitness[sorted_idx[0]]:.2f}")
         
     # Return best solution in same format as WOA

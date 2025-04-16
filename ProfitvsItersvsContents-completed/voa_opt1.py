@@ -3,55 +3,52 @@ import random
 import copy
 from scipy.special import gamma
 
-M = 300
-M_V = 120
 M_U = 40
-dim = 2 * M 
+M_V = 120
 
 class Vulture:
-    def __init__(self, dim, seed):
+    def __init__(self, dim, total_contents, seed):
         np.random.seed(seed)
         # Initialize cache probabilities for UAVs and users
-        q_V_initial = np.random.uniform(0, 1, M)
-        q_U_initial = np.random.uniform(0, 1, M)
-        
+        q_V_initial = np.random.uniform(0, 1, total_contents)
+        q_U_initial = np.random.uniform(0, 1, total_contents)
         self.position = np.zeros(dim)
-        self.position[:M] = q_V_initial
-        self.position[M:] = q_U_initial
+        self.position[:total_contents] = q_V_initial
+        self.position[total_contents:] = q_U_initial
         
         # FIFO queues for constraint enforcement
-        self.fifo_V = [i for i in range(M)]
+        self.fifo_V = [i for i in range(total_contents)]
         random.shuffle(self.fifo_V)
 
-        self.fifo_U = [i for i in range(M, 2*M)]
+        self.fifo_U = [i for i in range(total_contents, 2*total_contents)]
         random.shuffle(self.fifo_U)
         
-        self._enforce_cache_constraints()
+        self._enforce_cache_constraints(total_contents)
         
-    def _enforce_cache_constraints(self):
+    def _enforce_cache_constraints(self, total_contents):
         # Enforce UAV cache capacity
-        sum_qV = np.sum(self.position[:M])
+        sum_qV = np.sum(self.position[:total_contents])
         while sum_qV > M_V:
-            # c = np.random.randint(0, M)
+            # c = np.random.randint(0, total_contents)
 
             c = self.fifo_V.pop(0)
             self.fifo_V.append(c)
             self.position[c] = 0
-            sum_qV = np.sum(self.position[:M])
+            sum_qV = np.sum(self.position[:total_contents])
             
         # Enforce user cache capacity
-        sum_qU = np.sum(self.position[M:])
+        sum_qU = np.sum(self.position[total_contents:])
         while sum_qU > M_U:
             c = self.fifo_U.pop(0)
             self.fifo_U.append(c)
-            # c = np.random.randint(M, 2*M)
+            # c = np.random.randint(total_contents, 2*total_contents)
 
             self.position[c] = 0
-            sum_qU = np.sum(self.position[M:])
+            sum_qU = np.sum(self.position[total_contents:])
 
 def avoa_optimizer(fitness_func, user_requests, user_pos, uav_pos, P_u_v_k, 
                    B_u_v_k, cluster_labels, K, num_users, num_UAVs, 
-                   uav_density, tau_U, max_iter=30, n_vultures=30, omega = 0.5):
+                   uav_density, tau_U, total_contents, max_iter=30, n_vultures=30):
     print("Initializing Vulture Optimization")
     # AVOA parameters
     p1 = 0.6    # Exploration parameter
@@ -60,13 +57,16 @@ def avoa_optimizer(fitness_func, user_requests, user_pos, uav_pos, P_u_v_k,
     alpha = 0.8 # Mobility randomness parameter
     w = 2.5     # Exploration constant
     
+    # Calculate dimension based on total_contents
+    dim = 2 * total_contents
+    
     # Initialize population
-    population = [Vulture(dim, i) for i in range(n_vultures)]
+    population = [Vulture(dim, total_contents, i) for i in range(n_vultures)]
     fitness = [fitness_func(v.position, user_requests, user_pos, uav_pos, 
                            P_u_v_k, B_u_v_k, cluster_labels, K, num_users, 
-                           num_UAVs, uav_density, tau_U, omega) for v in population]
+                           num_UAVs, uav_density, tau_U, total_contents) for v in population]
     print("Initial Vultures Computed ...")
-
+    iterations_values = []
     # Sort and select best vultures
     sorted_idx = np.argsort(fitness)[::-1]
     BestV1 = copy.deepcopy(population[sorted_idx[0]])
@@ -125,12 +125,12 @@ def avoa_optimizer(fitness_func, user_requests, user_pos, uav_pos, P_u_v_k,
                         
             # Update position with constraints
             vulture.position = np.clip(new_pos, 0, 1)
-            vulture._enforce_cache_constraints()
+            vulture._enforce_cache_constraints(total_contents)
             
             # Update fitness
             new_fitness = fitness_func(vulture.position, user_requests, user_pos, 
                                       uav_pos, P_u_v_k, B_u_v_k, cluster_labels, 
-                                      K, num_users, num_UAVs, uav_density, tau_U, omega)
+                                      K, num_users, num_UAVs, uav_density, tau_U, total_contents)
             
             # Update best solutions
             if new_fitness > fitness[sorted_idx[0]]:
@@ -147,11 +147,10 @@ def avoa_optimizer(fitness_func, user_requests, user_pos, uav_pos, P_u_v_k,
         else:
             repeats = 0
             prev_iter_profit = fitness[sorted_idx[0]]
-        
-   
+      
         print(f"Iteration {iter+1}: Best Profit = {fitness[sorted_idx[0]]:.2f}")
-        
+        iterations_values.append(fitness[sorted_idx[0]])
     # Return best solution in same format as WOA
-    optimal_qV = BestV1.position[:M]
-    optimal_qU = BestV1.position[M:]
-    return np.concatenate([optimal_qV, optimal_qU])
+    optimal_qV = BestV1.position[:total_contents]
+    optimal_qU = BestV1.position[total_contents:]
+    return np.concatenate([optimal_qV, optimal_qU]), iterations_values

@@ -138,8 +138,7 @@ def woa_optimizer(fitness_func, user_requests, user_pos, uav_pos, P_u_v_k, B_u_v
             prev_iter_profit = best_whale_fitness
         
         print(f"Iteration {iter+1}: Best Profit = {best_whale_fitness:.2f}")
-    
-        # print(f"Best Position: \n {best_whale.position}")
+
         iter+=1
     return best_whale.position
 

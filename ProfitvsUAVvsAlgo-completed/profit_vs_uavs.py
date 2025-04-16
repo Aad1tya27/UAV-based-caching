@@ -803,24 +803,21 @@ def fitness_func(position ,user_requests, user_pos, uav_pos, P_u_v_k, B_u_v_k, c
 if __name__ == "__main__":
 
 
-    num_UAVs= 3
+    num_users= 60
     
-
     K = 10
-    user_counts = [10, 20, 30, 40, 50]
-    totalprofits_random = np.zeros(len(user_counts))
-    totalprofits_whale = np.zeros(len(user_counts))
-    totalprofits_vulture = np.zeros(len(user_counts))
+    uav_counts = [3, 5, 7, 9, 11]
+    totalprofits_random = np.zeros(len(uav_counts))
+    totalprofits_whale = np.zeros(len(uav_counts))
+    totalprofits_vulture = np.zeros(len(uav_counts))
 
-    max_iters = 20
-
+    max_iters = 1
+    user_requests = generate_user_requests(K, num_users) # 1st param
+    user_pos = np.random.uniform(0, area_size, (num_users, 2)) # 2nd param
     for _ in range(max_iters):
-        print(f"Iteration {_+1}/{max_iters}")
-        for idx, num_users in enumerate(user_counts):
-            print("Running for User count:", num_users)
-            
-            user_requests = generate_user_requests(K, num_users) # 1st param
-            user_pos = np.random.uniform(0, area_size, (num_users, 2)) # 2nd param
+        for idx, num_UAVs in enumerate(uav_counts):
+            print("Running for UAVs count:", num_UAVs)
+ 
             kmeans = KMeans(n_clusters=num_UAVs).fit(user_pos)
             uav_pos = np.hstack([kmeans.cluster_centers_, np.random.uniform(*UAV_altitude_range, (num_UAVs, 1))]) # 5th param
             uav_density = num_UAVs / area_size**2
@@ -957,45 +954,36 @@ if __name__ == "__main__":
             totalprofits_random[idx] += totalprofit
             totalprofits_whale[idx] += totalprofit2
             totalprofits_vulture[idx] += totalprofit3
-            # totalprofits_whale.append(totalprofit2)
-            # totalprofits_vulture.append(totalprofit3)
+            
 
-    totalprofits_whale = totalprofits_whale / max_iters
+    totalprofits_whale = totalprofits_whale/max_iters
     totalprofits_random = totalprofits_random / max_iters
     totalprofits_vulture = totalprofits_vulture / max_iters
 
-    plt.figure(figsize=(10, 6))
-    
-    # Add origin point (0,0) to each data series
-    user_counts_with_origin = user_counts
-    random_with_origin = list(totalprofits_random)
-    whale_with_origin = list(totalprofits_whale)
-    vulture_with_origin = list(totalprofits_vulture)
-    
-    plt.plot(user_counts_with_origin, random_with_origin, 'b-o', label='Random Method', linewidth=2)
-    plt.plot(user_counts_with_origin, whale_with_origin, 'r--s', label='Whale Optimization', linewidth=2)
-    plt.plot(user_counts_with_origin, vulture_with_origin, 'g-.D', label='Vulture Optimization', linewidth=2)
+    # Save results to a text file
+    results_file = "ProfitvsUAVvsAlgo/results.txt"
+    with open(results_file, 'w') as f:
+        f.write(f"Number of UAVs\tRandom Method\tWhale Optimization\tVulture Optimization\n")
+        for i, num_uav in enumerate(uav_counts):
+            f.write(f"{num_uav}\t{totalprofits_random[i]}\t{totalprofits_whale[i]}\t{totalprofits_vulture[i]}\n")
+    print(f"Results saved to {results_file}")
 
-    plt.xlabel('Number of Users', fontsize=12)
+    plt.figure(figsize=(10, 6))
+    plt.plot(uav_counts, totalprofits_random, 'b-o', label='Random Method', linewidth=2)
+    plt.plot(uav_counts, totalprofits_whale, 'r--s', label='Whale Optimization', linewidth=2)
+    plt.plot(uav_counts, totalprofits_vulture, 'g-.D', label='Vulture Optimization', linewidth=2)
+
+    plt.xlabel('Number of UAVs', fontsize=12)
     plt.ylabel('Total Profit', fontsize=12)
     plt.title("System Performance Comparison", fontsize=14)
-    plt.xticks(user_counts_with_origin, fontsize=10)
+    plt.xticks(uav_counts, fontsize=10)
     plt.yticks(fontsize=10)
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.legend(fontsize=10)
     plt.tight_layout()
 
     # Save and show
-    filename = "ProfitvsUsersvsAlgo/profit_vs_users_num_uavs"+str(num_users) + ".png"
+    filename = "ProfitvsUAVvsAlgo/profit_vs_uavs_num_users"+str(num_users) + ".png"
     plt.savefig(filename, dpi=300)
-    
-    # Save results to a text file
-    results_file = "ProfitvsUsersvsAlgo/results.txt"
-    with open(results_file, 'w') as f:
-        # Add origin point (0,0) to the results file
-        for i, num_user in enumerate(user_counts):
-            f.write(f"{num_user}\t{totalprofits_random[i]}\t{totalprofits_whale[i]}\t{totalprofits_vulture[i]}\n")
-    print(f"Results saved to {results_file}")
-    
     plt.show()
 

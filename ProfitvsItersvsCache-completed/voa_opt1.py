@@ -4,17 +4,16 @@ import copy
 from scipy.special import gamma
 
 M = 300
-M_V = 120
 M_U = 40
 dim = 2 * M 
 
 class Vulture:
-    def __init__(self, dim, seed):
+    def __init__(self, dim,M_V,  seed):
         np.random.seed(seed)
         # Initialize cache probabilities for UAVs and users
         q_V_initial = np.random.uniform(0, 1, M)
         q_U_initial = np.random.uniform(0, 1, M)
-        
+        self.M_V = M_V
         self.position = np.zeros(dim)
         self.position[:M] = q_V_initial
         self.position[M:] = q_U_initial
@@ -31,7 +30,7 @@ class Vulture:
     def _enforce_cache_constraints(self):
         # Enforce UAV cache capacity
         sum_qV = np.sum(self.position[:M])
-        while sum_qV > M_V:
+        while sum_qV > self.M_V:
             # c = np.random.randint(0, M)
 
             c = self.fifo_V.pop(0)
@@ -51,7 +50,7 @@ class Vulture:
 
 def avoa_optimizer(fitness_func, user_requests, user_pos, uav_pos, P_u_v_k, 
                    B_u_v_k, cluster_labels, K, num_users, num_UAVs, 
-                   uav_density, tau_U, max_iter=30, n_vultures=30, omega = 0.5):
+                   uav_density, tau_U, M_V, max_iter=30, n_vultures=30, omega = 0.5):
     print("Initializing Vulture Optimization")
     # AVOA parameters
     p1 = 0.6    # Exploration parameter
@@ -61,12 +60,12 @@ def avoa_optimizer(fitness_func, user_requests, user_pos, uav_pos, P_u_v_k,
     w = 2.5     # Exploration constant
     
     # Initialize population
-    population = [Vulture(dim, i) for i in range(n_vultures)]
+    population = [Vulture(dim, M_V, i) for i in range(n_vultures)]
     fitness = [fitness_func(v.position, user_requests, user_pos, uav_pos, 
                            P_u_v_k, B_u_v_k, cluster_labels, K, num_users, 
                            num_UAVs, uav_density, tau_U, omega) for v in population]
     print("Initial Vultures Computed ...")
-
+    iterations_values = []
     # Sort and select best vultures
     sorted_idx = np.argsort(fitness)[::-1]
     BestV1 = copy.deepcopy(population[sorted_idx[0]])
@@ -147,11 +146,10 @@ def avoa_optimizer(fitness_func, user_requests, user_pos, uav_pos, P_u_v_k,
         else:
             repeats = 0
             prev_iter_profit = fitness[sorted_idx[0]]
-        
-   
+       
         print(f"Iteration {iter+1}: Best Profit = {fitness[sorted_idx[0]]:.2f}")
-        
+        iterations_values.append(fitness[sorted_idx[0]])
     # Return best solution in same format as WOA
     optimal_qV = BestV1.position[:M]
     optimal_qU = BestV1.position[M:]
-    return np.concatenate([optimal_qV, optimal_qU])
+    return np.concatenate([optimal_qV, optimal_qU]), iterations_values
