@@ -807,12 +807,12 @@ if __name__ == "__main__":
     
 
     K = 10
-    user_counts = [10, 20, 30, 40, 50]
+    user_counts = [20, 30, 40, 50]
     totalprofits_random = np.zeros(len(user_counts))
     totalprofits_whale = np.zeros(len(user_counts))
     totalprofits_vulture = np.zeros(len(user_counts))
 
-    max_iters = 20
+    max_iters = 50
 
     for _ in range(max_iters):
         print(f"Iteration {_+1}/{max_iters}")
@@ -967,10 +967,10 @@ if __name__ == "__main__":
     plt.figure(figsize=(10, 6))
     
     # Add origin point (0,0) to each data series
-    user_counts_with_origin = user_counts
-    random_with_origin = list(totalprofits_random)
-    whale_with_origin = list(totalprofits_whale)
-    vulture_with_origin = list(totalprofits_vulture)
+    user_counts_with_origin = [0] + user_counts
+    random_with_origin = [0] + list(totalprofits_random)
+    whale_with_origin = [0] + list(totalprofits_whale)
+    vulture_with_origin = [0] + list(totalprofits_vulture)
     
     plt.plot(user_counts_with_origin, random_with_origin, 'b-o', label='Random Method', linewidth=2)
     plt.plot(user_counts_with_origin, whale_with_origin, 'r--s', label='Whale Optimization', linewidth=2)
@@ -993,6 +993,7 @@ if __name__ == "__main__":
     results_file = "ProfitvsUsersvsAlgo/results.txt"
     with open(results_file, 'w') as f:
         # Add origin point (0,0) to the results file
+        f.write(f"0\t0\t0\t0\n")
         for i, num_user in enumerate(user_counts):
             f.write(f"{num_user}\t{totalprofits_random[i]}\t{totalprofits_whale[i]}\t{totalprofits_vulture[i]}\n")
     print(f"Results saved to {results_file}")
