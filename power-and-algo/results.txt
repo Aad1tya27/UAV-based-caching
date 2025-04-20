@@ -1,0 +1,4 @@
+Method	Without Power Optimization	With Power Optimization
+Random	14.133439486652545	25.22197150009859
+Whale Optimization	19.523883413703707	35.243047194566415
+Vulture Optimization	17.692379585112707	31.997138821138677
